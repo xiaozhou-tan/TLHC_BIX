@@ -1,0 +1,1456 @@
+---
+title: "TLHC data analysis"
+author: "leo"
+date: "2024-07-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Library
+```{r}
+library(afex)
+library(tidyverse)
+library(ggplot2)
+library(readxl)
+library(sdamr)
+library(lme4)
+library(GGally)
+library(flexplot)
+library(emmeans)
+```
+
+# Import data and data wrangling
+```{r}
+bix <- read_excel("/Users/xiaozhoutan/Desktop/UCL MSc/BECH0006/BIX/Data file/TLHC copy.xlsx") %>%
+  mutate(msg_condition = factor(msg_condition, level = c(1, 2, 3, 4, 5), labels = c("ref", "gain_frame", "messenger", "status_quo", "challenge")),
+         # contrast codes for msg_condition
+         c1 = ifelse(msg_condition == 1, -1,
+                     ifelse(msg_condition == 2, 1, 0)), #1 vs 2
+         c2 = ifelse(msg_condition == 1, -1,
+                     ifelse(msg_condition == 3, 1, 0)), #1 vs 3
+         c3 = ifelse(msg_condition == 1, -1,
+                     ifelse(msg_condition == 4, 1, 0)), #1 vs 4
+         c4 = ifelse(msg_condition == 1, -1,
+                     ifelse(msg_condition == 5, 1, 0)), #1 vs 5
+         c5 = ifelse(msg_condition == 2, -1,
+                     ifelse(msg_condition == 3, 1, 0)), #2 vs 3
+         c6 = ifelse(msg_condition == 2, -1,
+                     ifelse(msg_condition == 4, 1, 0)), #2 vs 4
+         c7 = ifelse(msg_condition == 2, -1,
+                     ifelse(msg_condition == 5, 1, 0)), #2 vs 5
+         c8 = ifelse(msg_condition == 3, -1,
+                     ifelse(msg_condition == 4, 1, 0)), #3 vs 4
+         c9 = ifelse(msg_condition == 3, -1,
+                     ifelse(msg_condition == 5, 1, 0)), #3 vs 5
+         c10 = ifelse(msg_condition == 4, -1,
+                     ifelse(msg_condition == 5, 1, 0)), #4 vs 5
+         c11 = ifelse(msg_condition == 1, -1, 1/4) # control vs intervention
+  ) %>%
+  mutate(
+    smoking_status2 = ifelse(smoking_status == 0, -1, smoking_status),
+    education3 = ifelse(education2 == 3, -1,
+                        ifelse(education2 == 2, 1,
+                               ifelse(education2 == 1, 2, 0))),
+    accommodation3 = ifelse(accommodation2 == 1, 1,
+                            ifelse(accommodation2 == 2, -1, 0)),
+    employment3 = ifelse(employment2 == 2, -1,
+                         ifelse(employment2 == 1, 1, 0))
+  )
+
+bix_long <- bix %>%
+  pivot_longer(11:20, names_to = "emotion", values_to = "e_res") %>%
+  mutate(
+    e_res2 = ifelse(e_res == 1, emotion, 0)
+  ) %>%
+  mutate(
+    valence = case_when(e_res2 == "feeling_confident" | e_res2 == "feeling_encouraged" | e_res2 == "feeling_grateful" | e_res2 == "feeling_interested" ~ 1,
+                        e_res2 == "feeling_nothing" | e_res2 == "feeling_uninterested" ~ 2,
+                        e_res2 == "feeling_annoyed" | e_res2 == "feeling_confused" | e_res2 == "feeling_scared" | e_res2 == "feeling_nervous" ~ 3,
+                        e_res2 == 0 ~ 0),
+    valence = factor(valence)
+  )
+contrasts(bix_long$valence) <- contr.treatment(4)
+
+bix2 <- bix_long %>%
+  filter(valence != 0) %>%
+  group_by(part_num, valence, msg_condition, msg_likelihood, education, smoking_status) %>%
+  reframe(
+    n = n()
+  )
+
+```
+
+# EDA
+```{r}
+# Distribution 
+bix %>%
+  group_by(msg_condition, smoking_status) %>%
+  summarise(
+    n = n()
+  ) %>%
+  mutate(
+    percent = n/sum(n)
+  ) %>% print(n = 50)
+
+bix %>%
+  plot_raincloud(y = msg_likelihood)
+
+# Likelihood to attend by message condition using mean (x = msg condition, y = mean)
+##Education: 1(University degree), 2(technical training), 3(no degree/training) 
+##Some other demographic variables do not show very meaningful plot due to shortage of data
+bix%>%
+  group_by(msg_condition) %>%
+  summarise(
+    mean = mean(msg_likelihood),
+    sd = sd(msg_likelihood)
+  ) %>%
+  ggplot(aes(x = msg_condition, y = mean)) +
+  geom_col(fill = "lightblue", width = 0.7) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.15) +
+  theme_minimal()  +
+  geom_text(aes(label = round(mean, 2)), 
+            vjust = -0.5,    
+            color = "black", 
+            size = 4) 
+
+# Accumulated sum for likelihood to attend per msg condition per education level
+## Education2: 1(University degree), 2(technical training), 3(no degree/training), 4(other)
+### Some other demographic variables do not show very meaningful plot due to shortage of data
+ggplot(bix, aes(x = msg_condition, y = msg_likelihood)) +
+  geom_col() +
+  facet_wrap(~education2)
+
+ggplot(bix, aes(x = msg_condition, y = msg_likelihood)) +
+  geom_col() +
+  facet_wrap(~education)
+
+ggplot(bix, aes(x = msg_condition, y = msg_likelihood)) +
+  geom_col() +
+  facet_wrap(~employment)
+
+ggplot(bix, aes(x = msg_condition, y = msg_likelihood)) +
+  geom_col() +
+  facet_wrap(~accommodation)
+
+ggplot(bix, aes(x = msg_condition, y = msg_likelihood)) +
+  geom_col() +
+  facet_wrap(~ethnicity)
+
+```
+
+
+
+# Demo per condition and likelihood_binary and emotion
+```{r}
+# Per condition
+## Gender
+bix %>%
+  group_by(msg_condition, gender) %>%
+  summarise(
+    n = n()
+) # fairly equal distribution of male vs female
+
+## Ethnicity
+bix %>%
+  group_by(msg_condition, ethnicity) %>%
+  summarise(
+    n = n()
+) %>%
+  print(n = 29) # mostly White (English, Welsh, Scottish, Northern-Irish, British, Irish, Roma, Other White)
+
+## Employment
+bix %>%
+  group_by(msg_condition, employment2) %>%
+  summarise(
+    n = n()
+) 
+
+## Accommodation
+bix %>%
+  group_by(msg_condition, accommodation2) %>%
+  summarise(
+    n = n()
+) 
+
+## Long_term Lung Health
+bix %>%
+  group_by(msg_condition, long_term_lung) %>%
+  summarise(n = n())
+
+## General health
+bix %>%
+  group_by(msg_condition, general_health) %>%
+  summarise(n = n()) %>% print(n = 28)
+
+
+
+# Per likelihood_binary
+## Gender
+bix %>%
+  group_by(msg_likelihood_binary, gender) %>%
+  summarise(n = n()) # fairly equal, with males slightly less likely to attend
+
+## Ethnicity
+bix %>%
+  group_by(msg_likelihood_binary, ethnicity) %>%
+  summarise(n = n()) # cannot observe difference
+
+## Employment
+bix %>%
+  group_by(msg_likelihood_binary, employment2) %>%
+  summarise(
+    n = n()
+) 
+
+## Accommodation
+bix %>%
+  group_by(msg_likelihood_binary, accommodation2) %>%
+  summarise(
+    n = n()
+) 
+
+## Long_term Lung Health
+bix %>%
+  group_by(msg_likelihood_binary, long_term_lung) %>%
+  summarise(n = n())
+
+## General health
+bix %>%
+  group_by(msg_likelihood_binary, general_health) %>%
+  summarise(n = n())
+
+## Education
+bix %>%
+  group_by(msg_likelihood_binary, education2) %>%
+  summarise(n = n())
+
+## Smoking Status
+bix %>%
+  group_by(msg_likelihood_binary, smoking_status) %>%
+  summarise(n = n())
+
+# Per emotion
+## Gender
+bix_long %>%
+  filter(valence != 0) %>%
+  group_by(gender, valence) %>%
+  summarise(n = n()) %>%
+  mutate(percent = n/sum(n)) %>%
+  print(n = 34)
+
+bix_long %>%
+  group_by(gender, e_res2) %>%
+  summarise(n = n()) %>%
+  print(n = 34) # mostly 4 (interested) across all genders
+
+## Ethnicity
+bix_long %>%
+  mutate(e_res2 = factor(e_res2)) %>%
+  group_by(ethnicity, e_res2) %>%
+  summarise(n = n()) %>%
+  print(n = 55) %>%
+  filter(e_res2 != 0) %>%
+  ggplot(aes(x = e_res2, y = n)) +
+  geom_col() +
+  facet_wrap(~ethnicity)
+
+bix_long %>%
+  filter(valence != 0) %>%
+  group_by(ethnicity, valence) %>%
+  summarise(n = n()) %>%
+  mutate(percent = n/sum(n)) %>%
+  print(n = 34)
+
+## Employment
+bix_long %>%
+  group_by(employment2, e_res2) %>%
+  summarise(
+    n = n()
+) %>% print(n = 31) #*
+
+bix_long %>%
+  filter(valence != 0) %>%
+  group_by(employment2, valence) %>%
+  summarise(n = n()) %>%
+  mutate(percent = n/sum(n)) %>%
+  print(n = 34)
+
+## Accommodation
+bix_long %>%
+  group_by(accommodation2, e_res2) %>%
+  summarise(
+    n = n()
+) %>% print(n = 31)
+
+bix_long %>%
+  filter(valence != 0) %>%
+  group_by(accommodation2, valence) %>%
+  summarise(n = n()) %>%
+  mutate(percent = n/sum(n)) %>%
+  print(n = 34)
+
+## Long_term Lung Health
+bix_long %>%
+  filter(e_res2 != 0) %>%
+  group_by(long_term_lung, e_res2) %>%
+  summarise(n = n()) %>%
+  mutate(percent = n/sum(n)) %>%
+  print(n = 31)
+
+bix_long %>%
+  filter(valence != 0) %>%
+  group_by(long_term_lung, valence) %>%
+  summarise(n = n()) %>%
+  mutate(percent = n/sum(n)) %>%
+  print(n = 34)
+
+## General health
+bix_long %>%
+  filter(e_res2 != 0) %>%
+  group_by(general_health, e_res2) %>%
+  summarise(n = n()) %>% 
+  mutate(percent = n/sum(n)) %>%
+  print(n = 55)
+
+bix_long %>%
+  filter(valence != 0) %>%
+  group_by(general_health, valence) %>%
+  summarise(n = n()) %>% 
+  mutate(percent = n/sum(n)) %>% print(n = 23)
+
+## Education
+bix_long %>%
+  filter(e_res2 != 0) %>%
+  group_by(education2, e_res2) %>%
+  summarise(n = n()) %>% 
+  mutate(percent = n/sum(n)) %>%
+  print(n = 42)
+
+bix_long %>%
+  filter(valence != 0) %>%
+  group_by(education2, valence) %>%
+  summarise(n = n()) %>%
+  mutate(percent = n/sum(n)) %>%
+  print(n = 34)
+
+## Smoking Status
+bix_long %>%
+  filter(e_res2 != 0) %>%
+  group_by(smoking_status, e_res2) %>%
+  summarise(n = n()) %>% 
+  mutate(percent = n/sum(n)) %>%
+  print(n = 42)
+
+bix_long %>%
+  filter(valence != 0) %>%
+  group_by(smoking_status, valence) %>%
+  summarise(n = n()) %>%
+  mutate(percent = n/sum(n)) %>%
+  print(n = 34)
+
+
+bix %>%
+  group_by(smoking_status2) %>%
+  summarize(mean = mean(msg_likelihood),
+            sd = sd(msg_likelihood))
+bix %>%
+  group_by(accommodation3) %>%
+  summarize(mean = mean(msg_likelihood),
+            sd = sd(msg_likelihood))
+bix %>%
+  group_by(smoking_status2) %>%
+  summarize(mean = mean(msg_likelihood),
+            sd = sd(msg_likelihood))
+
+ggplot(bix, ) +
+  geom_boxplot(aes(x = factor(smoking_status2, labels = c("ex-smoker", "smoker")), y = msg_likelihood)) +
+  theme_minimal()
+
+ggplot(bix, aes(x = factor(accommodation3, labels = c("Not owned", "Owned", "Other")), y = msg_likelihood)) +
+  geom_boxplot() +
+  facet_wrap(~msg_condition) +
+  theme_minimal()
+```
+
+# RQ1
+```{r}
+bix$attend <- rowSums(bix[, 45:52])
+bix$nonattend <- rowSums(bix[, 53:63])
+
+cor(bix$attend, bix$nonattend)
+
+bix <- bix %>%
+  mutate(
+    chose_both = ifelse(attend == 0 | nonattend == 0, 0, 1)
+  )
+
+sum(bix$chose_both)
+
+
+#ggpairs(bix, columns = 45:63)
+
+attend_selection <- rowSums(bix[,45:52])
+nonattend_selection <- rowSums(bix[, 53:63])
+table(attend_selection, nonattend_selection)
+
+# Enablers
+enablers <- bix %>%
+  summarise(
+    treatable = sum(attend_treatable),
+    gp_recom = sum(attend_GP),
+    family_recom = sum(attend_family),
+    always = sum(attend_always),
+    earlier = sum(attend_earlier),
+    control_health = sum(attend_control),
+    reassure = sum(attend_reassuring),
+    free = sum(attend_free)
+  ) %>% 
+  pivot_longer(1:8, names_to = "attend", values_to = "n") %>%
+  mutate(percent = n/nrow(bix))
+ 
+
+# Barriers
+barriers <- bix %>%
+  summarise(
+    GP_no = sum(nonattend_GP),
+    scared = sum(nonattend_scared),
+    know = sum(nonattend_know),
+    no_treat = sum(nonattend_treated),
+    symptoms = sum(nonattend_symptoms),
+    judged = sum(nonattend_judged),
+    no_risk = sum(nonattend_risk),
+    nervous = sum(nonattend_nervous),
+    no_worth = sum(nonattend_worthwhile),
+    no_understand = sum(nonattend_understand),
+    difficult = sum(nonattend_difficult)
+  ) %>% 
+  pivot_longer(1:11,names_to = "no_attend", values_to = "n") %>%
+  mutate(percent = n/nrow(bix))
+ 
+
+
+enablers
+barriers
+
+sum(enablers$n)
+sum(barriers$n)
+
+chisq.test(enablers$n)
+chisq.test(barriers$n)
+
+
+# Print the chi-squared test result
+print(chisq_result)
+
+# Check residuals to see which enabler contributed most to the chi-squared statistic
+chisq_residuals <- chisq_result$residuals
+enablers <- enablers %>%
+  mutate(residuals = chisq_residuals)
+
+# Print the table with residuals
+print(enablers)
+
+# Create the contingency table
+data <- matrix(c(1510, 863,
+                 4648, 1051),
+               nrow = 2, 
+               byrow = TRUE)
+
+# Add row and column names
+rownames(data) <- c("Emotion", "Other")
+colnames(data) <- c("Enablers", "Barriers")
+
+# Perform the chi-square test
+chi_square_test <- chisq.test(data)
+
+# Print the test results
+print(chi_square_test)
+
+```
+
+
+# RQ2-3 (likelihood of attendance ~ messgae conditions)
+```{r}
+# Non parametric test with Kruskal-Wallis test
+kruskal1 <- kruskal.test(msg_likelihood ~ msg_condition, bix) 
+kruskal1
+
+glm_model <- glm(msg_likelihood ~ msg_condition + smoking_status2, data = bix, family = gaussian(link = "identity"))
+summary(glm_model)
+
+```
+
+
+
+```{r}
+# ANOVA
+fit <- aov(msg_likelihood ~ msg_condition, data = bix)
+summary(fit)
+
+library(boot)
+
+# Define function to perform ANOVA
+boot_anova <- function(data, indices) {
+  d <- data[indices, ]
+  fit <- aov(msg_likelihood ~ msg_condition, data = d)
+  return(summary(fit)[[1]]["Pr(>F)"][1, 1])  # Return the p-value
+}
+
+# Perform bootstrap
+set.seed(123)
+boot_results_anova <- boot(data = bix, statistic = boot_anova, R = 2000)
+
+# Get percentile confidence intervals
+boot.ci(boot_results_anova, type = "perc")
+
+
+# Tukey HSD
+TukeyHSD(fit)
+
+# Define function to perform Tukey's HSD
+boot_tukey <- function(data, indices) {
+  d <- data[indices, ]
+  fit <- aov(msg_likelihood ~ msg_condition, data = d)
+  tukey_res <- TukeyHSD(fit)$msg_condition[, "p adj"]
+  return(as.vector(tukey_res))  # Ensure it returns a vector
+}
+
+# Perform bootstrap
+set.seed(123)
+boot_results_tukey <- boot(data = bix, statistic = boot_tukey, R = 2000)
+
+# Calculate percentile-based confidence intervals
+ci_tukey <- apply(boot_results_tukey$t, 2, function(x) quantile(x, c(0.025, 0.975)))
+
+print(ci_tukey)
+
+```
+
+```{r}
+bix %>%
+  group_by(msg_condition) %>%
+  summarise(Mean = mean(msg_likelihood),
+            sd = sd(msg_likelihood)) %>%
+  ggplot(aes(y = Mean, x = factor(msg_condition, labels = c("Control", "Gain-frame", "Messenger", "Status quo", "Challenging")))) +
+  geom_col(width = 0.7, fill = "steelblue", alpha = 0.7) +
+  geom_errorbar(aes(ymin = Mean - sd, ymax = Mean + sd), width = 0.3) +
+  labs(x = "Message conditions", y = "Mean likelihood of attending") +
+  theme_minimal()
+```
+
+
+```{r}
+# Simple linear model 1 (lm1)
+lm1 <- lm(msg_likelihood ~ msg_condition, bix)
+summary(lm1)
+car::Anova(lm1, type = 3)
+
+
+library(boot)
+boot_lm1 <- lmboot::ANOVA.boot(msg_likelihood ~ msg_condition, data = bix, B = 5000, type = "residual", wild.dist = "normal", seed = 20240821, keep.boot.resp = FALSE)
+
+boot.ci(boot_lm1, type = "perc")
+
+
+## only msg_condition3 differs significantly (t(3269) = 2.385, p = 0.017)
+## no significance for F test (F(4, 3269) = 2.266, p = 0.05973)
+
+# contrast codes (sub lm1)
+## c1: -1*msg1, +1*msg2
+## c2: -1*msg1, +1*msg3
+## c3: -1*msg1, +1*msg4
+## c4: -1*msg1, +1*msg5
+## c5: -1*msg2, +1*msg3
+## c6: -1*msg2, +1*msg4
+## c7: -1*msg2, +1*msg5
+## c8: -1*msg3, +1*msg4
+## c9: -1*msg3, +1*msg5
+
+summary(lm(msg_likelihood ~ c1, bix)) #1 < 2
+summary(lm(msg_likelihood ~ c2, bix)) #1 < 3 *
+summary(lm(msg_likelihood ~ c3, bix)) #1 < 4
+summary(lm(msg_likelihood ~ c4, bix)) #1 < 5
+summary(lm(msg_likelihood ~ c5, bix)) #2 < 3 *
+summary(lm(msg_likelihood ~ c6, bix)) #2 > 4
+summary(lm(msg_likelihood ~ c7, bix)) #2 < 5
+summary(lm(msg_likelihood ~ c8, bix)) #3 > 4 *
+summary(lm(msg_likelihood ~ c9, bix)) #3 > 5
+summary(lm(msg_likelihood ~ c10, bix)) #4 < 5
+summary(lm(msg_likelihood ~ c11, bix)) #1 < 2:5
+
+
+
+# ANOVA
+mod1 <- aov_car(msg_likelihood ~ msg_condition + feeling_scared + Error(part_num), data = bix, adjust = "holm")
+summary(mod1)
+
+# contrast code with emmeans
+em <- emmeans(mod1, "msg_condition")
+em
+
+con <- list(
+  int_contr = c(-1, 1/4, 1/4, 1/4, 1/4),
+  msg1v2 = c(-1, 1, 0, 0, 0),
+  msg1v3 = c(-1, 0, 1, 0, 0),
+  msg1v4 = c(-1, 0, 0, 1, 0),
+  msg1v5 = c(-1, 0, 0, 0, 1),
+  msg2v3 = c(0, -1, 1, 0, 0),
+  msg2v4 = c(0, -1, 0, 1, 0),
+  msg2v5 = c(0, -1, 0, 0, 1),
+  msg3v4 = c(0, 0, -1, 1, 0),
+  msg3v5 = c(0, 0, -1, 0, 1),
+  msg4v5 = c(0, 0, 0, -1, 1)
+)
+
+contrast(em, con) #same as lm test
+contrast(em, con, adjust = "holm") #when adjusted with Holm test, no significant results
+
+# Simple linear model 2 (lm2)
+lm2 <- lm(msg_likelihood ~ valence, bix2)
+## Result for lm2
+summary(lm2)
+
+
+
+# assumptions check
+hist(lm1$residuals)
+plot(lm_demo)
+lmtest::dwtest(lm_demo)
+shapiro.test(residuals(lm_demo))
+
+
+
+```
+
+## Aussumption test
+```{r}
+# Diagnostic plot with "performance" package
+performance::check_model(lm1, check = "all")
+
+plot(lm1)
+```
+
+
+# Bootstrap linear regression estimation biases
+```{r}
+library(boot)
+lm1 <- lm(msg_likelihood ~ msg_condition, bix)
+
+# Define a function to calculate the regression coefficients
+boot_fn <- function(data, indices) {
+  d <- data[indices, ]  # Resample the data
+  fit <- lm(msg_likelihood ~ msg_condition, data = d)
+  return(coef(fit))
+}
+
+# Perform the bootstrap with 5000 resample
+set.seed(123)  # For reproducibility
+boot(data = bix, statistic = boot_fn, R = 6000)
+
+
+# Boots trap F-stats
+library(WRS2)
+set.seed(20240822)
+boot1 <- t1way(msg_likelihood ~ msg_condition, data = bix, tr = 0, nboot = 5000)
+
+
+boot2 <- t1waybt(msg_likelihood ~ msg_condition, data = bix, tr = 0.05, nboot = 5000)
+
+
+###
+library(boot)
+
+# Function to calculate pairwise differences
+posthoc_fn <- function(data, indices) {
+  d <- data[indices, ]
+  fit <- aov(msg_likelihood ~ msg_condition, data = d)
+  tukey_res <- TukeyHSD(fit)
+  return(as.vector(tukey_res$msg_condition[, "diff"]))  # Extract pairwise differences
+}
+
+# Perform bootstrapping
+set.seed(123)
+boot_results <- boot(data = bix, statistic = posthoc_fn, R = 1000)
+
+# Calculate observed pairwise differences from the original data
+fit_original <- aov(msg_likelihood ~ msg_condition, data = bix)
+tukey_res_original <- TukeyHSD(fit_original)
+observed_diffs <- as.vector(tukey_res_original$msg_condition[, "diff"])
+
+# Calculate bootstrap p-values
+p_values <- apply(boot_results$t, 2, function(x) mean(abs(x) >= abs(observed_diffs)))
+
+# Create a summary table with observed differences, bootstrap confidence intervals, and p-values
+boot_ci <- apply(boot_results$t, 2, function(x) quantile(x, c(0.025, 0.975)))
+results <- data.frame(
+  Comparison = rownames(tukey_res_original$msg_condition),
+  Observed_Diff = observed_diffs,
+  CI_Lower = boot_ci[1,],
+  CI_Upper = boot_ci[2,],
+  P_Value = p_values
+)
+
+# Print the results
+print(results)
+####
+
+#ANCOVA
+boot_cov <- t1waybt(msg_likelihood ~ msg_condition + gender + age_specific + ethnicity + smoking_status2 + (education3 + accommodation3 + employment3), data = bix, tr = 0, nboot = 1000)
+
+```
+
+```{r}
+bootstrap_f_stat <- function(data, formula, R = 1000) {
+  # Original model and F-statistic
+  original_fit <- aov(formula, data = data)
+  original_f <- summary(original_fit)[[1]][1, "F value"]
+  
+  # Define a function to compute F-statistic for bootstrapped samples
+  f_stat_fn <- function(data, indices) {
+    d <- data[indices, ]
+    fit <- aov(formula, data = d)
+    return(summary(fit)[[1]][1, "F value"])
+  }
+  
+  # Generate bootstrap samples and compute F-statistic for each
+  boot_f_values <- replicate(R, f_stat_fn(data, sample(1:nrow(data), replace = TRUE)))
+  
+  # Calculate the p-value as the proportion of bootstrapped F values >= original F
+  p_value <- mean(boot_f_values >= original_f)
+  
+  # Return the results as a list
+  return(list(original_f = original_f, boot_f_values = boot_f_values, p_value = p_value))
+}
+
+# Example usage
+set.seed(123)
+result <- bootstrap_f_stat(data = bix, formula = msg_likelihood ~ msg_condition, R = 2000)
+print(result)
+
+```
+
+# Martin's codes
+```{r}
+# Load necessary libraries
+library(MKinfer)
+library(dplyr)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Initialize a list to store results
+results <- list()
+
+# Perform pairwise comparisons using boot.t.test
+groups <- levels(bix$msg_condition)
+n_comparisons <- length(groups) * (length(groups) - 1) / 2
+alpha <- 0.05
+adjusted_alpha <- alpha / n_comparisons
+
+for (i in 1:(length(groups) - 1)) {
+  for (j in (i + 1):length(groups)) {
+    g1 <- groups[i]
+    g2 <- groups[j]
+    
+    # Subset the data for the two groups
+    data_g1 <- bix$msg_likelihood[bix$msg_condition == g1]
+    data_g2 <- bix$msg_likelihood[bix$msg_condition == g2]
+    
+    # Perform bootstrap t-test
+    bt <- boot.t.test(x = data_g1, y = data_g2, R = 1000, conf.level = 1 - adjusted_alpha)
+    
+    # Store results
+    results[[paste0(g1, "_vs_", g2)]] <- list(
+      mean_diff = bt$estimate[1] - bt$estimate[2],
+      ci_lower = bt$conf.int[1],
+      ci_upper = bt$conf.int[2],
+      p_value = bt$p.value
+    )
+  }
+}
+
+# Convert results to a data frame
+res_df <- do.call(rbind, lapply(names(results), function(x) {
+  c(Comparison = x, results[[x]])
+}))
+
+# Convert the relevant columns to numeric
+res_df <- as.data.frame(res_df)
+res_df$mean_diff <- as.numeric(res_df$mean_diff)
+res_df$ci_lower <- as.numeric(res_df$ci_lower)
+res_df$ci_upper <- as.numeric(res_df$ci_upper)
+res_df$p_value <- as.numeric(res_df$p_value)
+
+# Adjust p-values for multiple comparisons (Bonferroni correction)
+res_df$p_value <- p.adjust(res_df$p_value, method = "bonferroni")
+
+# View the results
+print(res_df)
+
+```
+
+
+# control for demographics
+```{r}
+# contrast codes
+contrasts(bix$msg_condition) <- matrix(c(-1, -1, -1, -1,
+                                         1, 0, 0, 0,
+                                         0, 1, 0, 0,
+                                         0, 0, 1, 0,
+                                         0, 0, 0, 1),
+                                       ncol = 4, byrow = TRUE)
+contrasts(bix$msg_condition) <- contr.treatment(5)
+contrasts(bix$msg_condition)
+
+# All basic demo
+fulldemo_mixed1 <- afex::mixed(msg_likelihood ~ msg_condition + (msg_condition | ethnicity) + (msg_condition | gender) + (msg_condition | employment3) + (msg_condition | accommodation3) + (msg_condition | education3) + (msg_condition | smoking_status2), data = bix)
+summary(fulldemo_mixed1)
+
+# Gender
+mixed_gender <- afex::mixed(msg_likelihood ~ msg_condition + (msg_condition | gender), data = bix) # negative eigenvalue
+summary(mixed_gender) # msg_condition3 not significant when controlled for gender 
+
+mixed_gender_simp <- afex::mixed(msg_likelihood ~ msg_condition + (1 | gender), data = bix) # good fit
+summary(mixed_gender_simp) # msg_condition3 slightly stronger than lm (p = 0.01195)
+
+# Age
+mixed_age <- afex::mixed(msg_likelihood ~ msg_condition + (msg_condition | age_specific), data = bix) # negative eigenvalue
+summary(mixed_age) # msg_condition3 not significant when controlled for gender 
+
+mixed_age_simp <- afex::mixed(msg_likelihood ~ msg_condition + (1 | age_specific), data = bix) # good fit
+summary(mixed_age_simp) # msg_condition3 slightly stronger than lm (p = 0.01195)
+
+# Ethnicity
+mixed_eth <- afex::mixed(msg_likelihood ~ msg_condition + (msg_condition | ethnicity), data = bix) # singular boundary
+summary(mixed_eth) # msg_condition3 not significant when controlled for ethnicity (p = 0.299)
+
+mixed_eth_simp <- afex::mixed(msg_likelihood ~ msg_condition + (1 | ethnicity), data = bix) 
+summary(mixed_eth_simp) # msg_condition3 slightly stronger than lm (p = 0.0115)
+
+# Education
+mixed_edu <- afex::mixed(msg_likelihood ~ msg_condition + (msg_condition | education3), data = bix) # singular boundary
+summary(mixed_edu) # msg_condition3 not significant when controlled for education (p = 0.341)
+
+mixed_edu_simp <- afex::mixed(msg_likelihood ~ msg_condition + (1 | education3), data = bix) # msg_condition3 slightly stronger
+summary(mixed_edu_simp) # msg_condition3 slightly more significant than lm (p = 0.0102)
+
+# Accommodation
+mixed_accomm <- afex::mixed(msg_likelihood ~ msg_condition + (msg_condition | accommodation3), data = bix) # singular boundary, negative eigenvalue
+summary(mixed_accomm) # msg_condition3 not significant when controlled for accommodation (p = 0.7313)
+
+mixed_accomm_simp <- afex::mixed(msg_likelihood ~ msg_condition + (1 | accommodation3), data = bix) 
+summary(mixed_accomm_simp) # msg_condition3 slightly stronger than lm(p = 0.0107)
+
+# Smoking status (0 - ex-smoker, 1 - smoker)
+mixed_smoking <- afex::mixed(msg_likelihood ~ msg_condition + (msg_condition | smoking_status2), data = bix) # singular boundary, negative eigenvalue
+summary(mixed_smoking) # msg_condition3 not significant when controlled for accommodation (p = 0.7313)
+
+mixed_smoking_simp <- afex::mixed(msg_likelihood ~ msg_condition + (1 | smoking_status2), data = bix) 
+summary(mixed_smoking_simp) # msg_condition3 slightly weaker than lm(p = 0.0107)
+
+# SES factors together
+mixed_SES <- afex::mixed(msg_likelihood ~ msg_condition + (msg_condition | accommodation3) + (msg_condition | education3) + (msg_condition | employment3), data = bix)
+summary(mixed_SES)
+
+mixed_SES_simp <- afex::mixed(msg_likelihood ~ msg_condition + (1 | accommodation3) + (1 | education3) + (1 | employment3), data = bix)
+summary(mixed_SES_simp)
+
+# With random intercepts
+fulldemo_mixed_simp <- afex::mixed(msg_likelihood ~ msg_condition + (1 | age_specific) + (1 | gender) + (1 | accommodation3) + (1 | education3) + (1 | smoking_status2), data = bix) # singular boundary
+summary(fulldemo_mixed_simp)
+
+```
+
+# ANCOVA
+```{r}
+# gender lm
+lm_gender <- lm(msg_likelihood ~ gender + msg_condition, data = bix)
+summary(lm_gender)
+confint(lm_gender, level = 0.90)
+
+# age lm
+lm_age <- lm(msg_likelihood ~ age_specific + msg_condition, data = bix)
+summary(lm_age)
+confint(lm_age, level = 0.90)
+
+# ethnicity lm
+lm_ethnicity <- lm(msg_likelihood ~ ethnicity + msg_condition, data = bix)
+summary(lm_ethnicity)
+confint(lm_ethnicity, level = 0.90)
+
+# SES lm
+lm_SES <- lm(msg_likelihood ~ education3 + accommodation3 + employment3 + msg_condition, data = bix)
+summary(lm_SES)
+confint(lm_SES, level = 0.90)
+
+# smoking status lm
+lm_smoking <- lm(msg_likelihood ~ smoking_status2 + msg_condition, data = bix)
+summary(lm_smoking)
+confint(lm_smoking, level = 0.90)
+
+# Together
+lm_demo <- lm(msg_likelihood ~ msg_condition + gender + age_specific + ethnicity + smoking_status2 + (education3 + accommodation3 + employment3), data = bix)
+summary(lm_demo, adjust = "holm")
+confint(lm_demo, level = 0.90)
+
+car::Anova(lm_demo, adjust = "holm", type = 3)
+```
+
+
+# Emotion descriptive
+```{r}
+# Descriptive
+bix %>%
+  group_by(msg_condition) %>%
+  summarise(
+    grateful = sum(feeling_grateful),
+    encouraged = sum(feeling_encouraged),
+    interested = sum(feeling_interested),
+    confident = sum(feeling_confident),
+    nothing = sum(feeling_nothing),
+    uninterested = sum(feeling_uninterested),
+    annoyed = sum(feeling_annoyed),
+    confused = sum(feeling_confused),
+    scared = sum(feeling_scared),
+    nervous = sum(feeling_nervous)
+  ) %>%
+  print() %>%
+  summarise(
+    grateful = sum(grateful),
+    encouraged = sum(encouraged),
+    interested = sum(interested),
+    confident = sum(confident),
+    nothing = sum(nothing),
+    uninterested = sum(uninterested),
+    annoyed = sum(annoyed),
+    confused = sum(confused),
+    scared = sum(scared),
+    nervous = sum(nervous)
+  )
+
+
+bix %>%
+  group_by(msg_condition) %>%
+  summarise(
+    grateful = sum(feeling_grateful),
+    encouraged = sum(feeling_encouraged),
+    interested = sum(feeling_interested),
+    confident = sum(feeling_confident),
+    nothing = sum(feeling_nothing),
+    uninterested = sum(feeling_uninterested),
+    annoyed = sum(feeling_annoyed),
+    confused = sum(feeling_confused),
+    scared = sum(feeling_scared),
+    nervous = sum(feeling_nervous)
+  ) %>%
+  reframe(
+    msg_condition = msg_condition,
+    n = grateful+encouraged+interested+confident+nothing+uninterested+annoyed+confused+scared+nervous
+  )
+
+# Contingency table and chi squared test - msg_condition and emotion
+cont_tab <- bix %>%
+  group_by(msg_condition) %>%
+  summarise(
+    grateful = sum(feeling_grateful),
+    encouraged = sum(feeling_encouraged),
+    interested = sum(feeling_interested),
+    confident = sum(feeling_confident),
+    nothing = sum(feeling_nothing),
+    uninterested = sum(feeling_uninterested),
+    annoyed = sum(feeling_annoyed),
+    confused = sum(feeling_confused),
+    scared = sum(feeling_scared),
+    nervous = sum(feeling_nervous)
+  ) %>%
+  select(-msg_condition)
+
+chisq.test(cont_tab)
+```
+
+# Emotion and message
+```{r}
+# Linear regression - likelihood to attend and emotion
+emo_lm <- lm(msg_likelihood ~ feeling_grateful+feeling_encouraged+feeling_interested+feeling_confident+feeling_nothing+feeling_uninterested+feeling_annoyed+feeling_confused+feeling_scared+feeling_nervous, bix)
+summary(emo_lm) 
+
+emo_lm2 <- lm(msg_likelihood ~ e_res2, bix_long)
+summary(emo_lm2)
+em <- emmeans(emo_lm2, ~ e_res2)
+summary(contrast(em, method = "pairwise", adjust = "holm")) # grateful highest likelihood, uninterested lowest likelihood
+
+## Save as table
+summary_tab <- summary(contrast(em, method = "pairwise"))
+write.csv(summary_tab, file = "summary_tab.csv")
+
+
+bix_long2 <- bix_long %>%
+  filter(e_res2 != 0) %>%
+  mutate(
+    e_res2 = ifelse(e_res2 == "feeling_confident", 1,
+                    ifelse(e_res2 == "feeling_encouraged", 2,
+                           ifelse(e_res2 == "feeling_grateful", 3,
+                                  ifelse(e_res2 == "feeling_interested", 4,
+                                         ifelse(e_res2 == "feeling_nothing", 5,
+                                                ifelse(e_res2 == "feeling_uninterested", 6,
+                                                       ifelse(e_res2 == "feeling_annoyed", 7,
+                                                              ifelse(e_res2 == "feeling_confused", 8,
+                                                                     ifelse(e_res2 == "feeling_scared", 9,
+                                                                            ifelse(e_res2 == "feeling_nervous", 10, 0))))))))))
+  )
+
+
+# Fear vs no fear likelihood to attend
+bix_fear <- bix %>%
+  mutate(
+    fear = ifelse(feeling_scared == 1, 1, 0),
+    e1 = ifelse(feeling_scared == 1, 1,
+                 ifelse(feeling_uninterested == 1, -1, NA)),
+    e2 = ifelse(feeling_scared == 1, 1,
+                 ifelse(feeling_nothing == 1, -1, NA)),
+    e3 = ifelse(feeling_scared == 1, 1,
+                 ifelse(feeling_annoyed == 1, -1, NA)),
+  )
+
+lm_fear <- lm(msg_likelihood ~ fear, bix_fear)
+summary(lm_fear)
+
+lm_fear2 <- lm(msg_likelihood ~ fear*msg_condition, data = bix_fear)
+summary(lm_fear2)
+
+summary(lm(msg_likelihood ~ e1, bix_fear))
+summary(lm(msg_likelihood ~ e2, bix_fear))
+summary(lm(msg_likelihood ~ e3, bix_fear))
+
+
+ggplot(bix_fear) +
+  geom_jitter(aes(x = e2, y = msg_likelihood))
+
+bix_long %>%
+  filter(msg_likelihood == 5) %>%
+  group_by(e_res2) %>%
+  summarise(
+    n = n()
+  ) # fear not the largest effect on likelihood < 7
+
+bix_long %>%
+  filter(e_res2 != 0) %>%
+  ggplot(aes(x = e_res2, y = msg_likelihood)) +
+  geom_violin()
+
+set.seed(20240804)
+bix_long %>%
+  filter(e_res2 != 0) %>%
+  ggplot(aes(x = e_res2, y = msg_likelihood)) +
+  geom_jitter(alpha = 0.6)
+
+
+
+
+bix_long %>%
+  filter(e_res2 != 0) %>%
+  plot_raincloud(y = msg_likelihood, groups = e_res2)
+
+```
+
+# Emotion mediation
+```{r}
+# Mediation with only scared
+mod1a <- lm(msg_likelihood ~ feeling_scared + gender + age_specific + ethnicity + smoking_status2 + (education3 + accommodation3 + employment3), bix, subset = msg_condition %in% c("ref", "challenge"))
+summary(mod1a)
+mod2a <- glm(feeling_scared ~ msg_condition+ gender + age_specific + ethnicity + smoking_status2 + (education3 + accommodation3 + employment3), bix, family = "binomial") #glm(binomial)
+mod3a <- lm(msg_likelihood ~ feeling_scared + msg_condition+ gender + age_specific + ethnicity + smoking_status2 + (education3 + accommodation3 + employment3), data = bix)
+
+set.seed(20240804)
+med2 <- mediation::mediate(model.m = mod2a, model.y = mod3a, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "feeling_scared", treat.value = "gain_frame", control.value = "ref")
+summary(med2)
+
+med3 <- mediation::mediate(model.m = mod2a, model.y = mod3a, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "feeling_scared", treat.value = "messenger", control.value = "ref")
+summary(med3)
+
+med4 <- mediation::mediate(model.m = mod2a, model.y = mod3a, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "feeling_scared", treat.value = "status_quo", control.value = "ref")
+summary(med4)
+
+med5 <- mediation::mediate(model.m = mod2a, model.y = mod3a, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "feeling_scared", treat.value = "challenge", control.value = "ref")
+summary(med5)
+```
+
+```{r}
+# Mediation with only nervous
+mod1b <- lm(msg_likelihood ~ feeling_nervous + gender + age_specific + ethnicity + smoking_status2 + (education3 + accommodation3 + employment3), bix, subset = msg_condition %in% c("ref", "status_quo"))
+summary(mod1b)
+mod2b <- glm(feeling_nervous ~ msg_condition + gender + age_specific + ethnicity + smoking_status2 + (education3 + accommodation3 + employment3), family = "binomial", bix)
+mod3b <- lm(msg_likelihood ~ feeling_nervous + msg_condition + gender + age_specific + ethnicity + smoking_status2 + (education3 + accommodation3 + employment3), data = bix)
+
+set.seed(20240804)
+med2b <- mediation::mediate(model.m = mod2b, model.y = mod3b, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "feeling_nervous", treat.value = "gain_frame", control.value = "ref")
+summary(med2b)
+
+med3b <- mediation::mediate(model.m = mod2b, model.y = mod3b, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "feeling_nervous", treat.value = "messenger", control.value = "ref")
+summary(med3b)
+
+med4b <- mediation::mediate(model.m = mod2b, model.y = mod3b, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "feeling_nervous", treat.value = "status_quo", control.value = "ref")
+summary(med4b)
+
+med5b <- mediation::mediate(model.m = mod2b, model.y = mod3b, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "feeling_nervous", treat.value = "challenge", control.value = "ref")
+summary(med5b)
+
+```
+
+```{r}
+# Mediation nervous + scared
+bix_ns <- bix %>%
+  mutate(
+    nervous_scared = case_when(feeling_scared == 1 ~ 1,
+                               feeling_nervous == 1 ~ 1)
+  )
+
+mod1c <- lm(msg_likelihood ~ nervous_scared, bix_ns)
+mod2c <- lm(nervous_scared ~ msg_condition, bix_ns)
+mod3c <- lm(msg_likelihood ~ nervous_scared + msg_condition, data = bix_ns)
+
+set.seed(20240804)
+med2c <- mediation::mediate(model.m = mod2c, model.y = mod3c, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "nervous_scared", treat.value = "gain_frame", control.value = "ref")
+summary(med2c)
+
+med3c <- mediation::mediate(model.m = mod2c, model.y = mod3c, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "nervous_scared", treat.value = "messenger", control.value = "ref")
+summary(med3c)
+
+med4c <- mediation::mediate(model.m = mod2c, model.y = mod3c, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "nervous_scared", treat.value = "status_quo", control.value = "ref")
+summary(med4c)
+
+med5c <- mediation::mediate(model.m = mod2c, model.y = mod3c, sims = 2000, boot = TRUE, treat = "msg_condition", mediator = "nervous_scared", treat.value = "challenge", control.value = "ref")
+summary(med5c)
+```
+
+```{r}
+# Diagram
+
+## scared only
+library(diagram)
+
+## gain frame
+data1 <- c(0, "'.015'", 0,
+           0, 0, 0,
+           "'-.811***'", "'.001 (.013)'", 0)
+M <- matrix(nrow = 3, ncol = 3, byrow = TRUE, data = data1)
+plot1 <- plotmat(M, pos = c(1,2),
+                 name = c("Feeling scared", "Gain-frame message", "Likelihood of attending"),
+                 box.type = "rect", box.size = 0.13, box.prop = 0.3, curve = 0, shadow.size = 0)
+
+
+## messenger
+data <- c(0, "'.031*'", 0,
+           0, 0, 0,
+           "'-.692***'", "'.188* (.210**)'", 0)
+M <- matrix(nrow = 3, ncol = 3, byrow = TRUE, data = data)
+plot <- plotmat(M, pos = c(1,2),
+                 name = c("Feeling scared", "Messenger message", "Likelihood of attending"),
+                 box.type = "rect", box.size = 0.13, box.prop = 0.3, curve = 0, shadow.size = 0)
+
+## status quo
+data <- c(0, "'.015'", 0,
+           0, 0, 0,
+           "'-.748**'", "'.000 (.011)'", 0)
+M <- matrix(nrow = 3, ncol = 3, byrow = TRUE, data = data)
+plot <- plotmat(M, pos = c(1,2),
+                 name = c("Feeling scared", "Status quo message", "Likelihood of attending"),
+                 box.type = "rect", box.size = 0.13, box.prop = 0.3, curve = 0, shadow.size = 0)
+
+## Challenge assumptions
+data <- c(0, "'.017'", 0,
+           0, 0, 0,
+           "'-.539**'", "'.109 (.122)'", 0)
+M <- matrix(nrow = 3, ncol = 3, byrow = TRUE, data = data)
+plot <- plotmat(M, pos = c(1,2),
+                 name = c("Feeling scared", "Challenge message", "Likelihood of attending"),
+                 box.type = "rect", box.size = 0.13, box.prop = 0.3, curve = 0, shadow.size = 0)
+```
+
+```{r}
+# Diagram
+
+## nervous only
+library(diagram)
+
+## gain frame
+data1 <- c(0, "'-.033'", 0,
+           0, 0, 0,
+           "'-.277'", "'.001 (-.006)'", 0)
+M <- matrix(nrow = 3, ncol = 3, byrow = TRUE, data = data1)
+plot1 <- plotmat(M, pos = c(1,2),
+                 name = c("Feeling nervous", "Gain-frame message", "Likelihood of attending"),
+                 box.type = "rect", box.size = 0.13, box.prop = 0.3, curve = 0, shadow.size = 0)
+
+
+## messenger
+data <- c(0, "'.016'", 0,
+           0, 0, 0,
+           "'-.291**'", "'.188* (.192*)'", 0)
+M <- matrix(nrow = 3, ncol = 3, byrow = TRUE, data = data)
+plot <- plotmat(M, pos = c(1,2),
+                 name = c("Feeling nervous", "Messenger message", "Likelihood of attending"),
+                 box.type = "rect", box.size = 0.13, box.prop = 0.3, curve = 0, shadow.size = 0)
+
+## status quo
+data <- c(0, "'.018'", 0,
+           0, 0, 0,
+           "'--.236*'", "'.000 (.005)'", 0)
+M <- matrix(nrow = 3, ncol = 3, byrow = TRUE, data = data)
+plot <- plotmat(M, pos = c(1,2),
+                 name = c("Feeling nervous", "Status quo message", "Likelihood of attending"),
+                 box.type = "rect", box.size = 0.13, box.prop = 0.3, curve = 0, shadow.size = 0)
+
+## Challenge assumptions
+data <- c(0, "'-.240*'", 0,
+           0, 0, 0,
+           "'-.234***'", "'.109 (.112)'", 0)
+M <- matrix(nrow = 3, ncol = 3, byrow = TRUE, data = data)
+plot <- plotmat(M, pos = c(1,2),
+                 name = c("Feeling nervous", "Challenge message", "Likelihood of attending"),
+                 box.type = "rect", box.size = 0.13, box.prop = 0.3, curve = 0, shadow.size = 0)
+```
+
+
+
+### Exploratory analysis
+
+```{r}
+# Efficacy
+aov_car(msg_likelihood ~ attend_treatable + Error(part_num), bix)
+
+```
+
+# Reasons and emotions ~ likelihood to attend
+```{r}
+cont_reasons_emo <- bix %>%
+  pivot_longer(attend_treatable:nonattend_difficult, names_to = "reasons", values_to = "reason_res") %>%
+  filter(reason_res == 1) %>%
+  group_by(reasons) %>%
+  summarise(
+    grateful = sum(feeling_grateful),
+    encouraged = sum(feeling_encouraged),
+    interested = sum(feeling_interested),
+    confident = sum(feeling_confident),
+    nothing = sum(feeling_nothing),
+    uninterested = sum(feeling_uninterested),
+    annoyed = sum(feeling_annoyed),
+    confused = sum(feeling_confused),
+    scared = sum(feeling_scared),
+    nervous = sum(feeling_nervous)
+  )
+
+# Assuming your data is in a dataframe called cont_reasons_emo
+cor(cont_reasons_emo %>% select(-reasons))
+
+# Remove the 'reasons' column and only keep the numeric columns for correlation
+numeric_data <- cont_reasons_emo %>% select(-reasons)
+
+# Create a matrix to store p-values
+p_values_matrix <- matrix(NA, ncol = ncol(numeric_data), nrow = ncol(numeric_data))
+colnames(p_values_matrix) <- colnames(numeric_data)
+rownames(p_values_matrix) <- colnames(numeric_data)
+
+# Loop through each pair of columns to calculate the correlation and p-value
+for (i in 1:(ncol(numeric_data) - 1)) {
+  for (j in (i + 1):ncol(numeric_data)) {
+    test_result <- cor.test(numeric_data[[i]], numeric_data[[j]])
+    p_values_matrix[i, j] <- test_result$p.value
+    p_values_matrix[j, i] <- test_result$p.value  # mirror the p-value
+  }
+}
+
+# Print the p-value matrix
+print(p_values_matrix)
+
+lik_reasons_emo <- bix %>%
+  pivot_longer(attend_treatable:nonattend_difficult, names_to = "reasons", values_to = "reason_res") %>%
+  filter(reason_res == 1) %>%
+  pivot_longer(feeling_grateful:feeling_nervous, names_to = "emotions", values_to = "emo_res") %>%
+  filter(emo_res == 1) %>%
+  group_by(reasons, emotions) %>%
+  summarise(
+    mean = mean(msg_likelihood),
+    sd = sd(msg_likelihood),
+    n = n())
+
+lik_reasons_emo %>%
+  arrange(desc(mean)) %>% print(n = 186)
+
+lik_reasons_emo %>%
+  arrange(reasons) %>%
+  ggplot() +
+  geom_point(aes(x = reasons, y = mean)) +
+  facet_wrap(~emotions)
+
+bix %>%
+  pivot_longer(attend_treatable:attend_free, names_to = "enablers", values_to = "enablers_res") %>%
+  filter(enablers_res == 1) %>%
+  pivot_longer(feeling_grateful:feeling_nervous, names_to = "emotions", values_to = "emo_res") %>%
+  filter(emo_res == 1) %>%
+  group_by(enablers, emotions) %>%
+  summarise(
+    mean = mean(msg_likelihood),
+    sd = sd(msg_likelihood),
+    n = n()) %>%
+  ggplot(aes(x = enablers, y = n)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.4) +
+  facet_wrap(~emotions) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+bix %>%
+  pivot_longer(nonattend_GP:nonattend_difficult, names_to = "barriers", values_to = "barriers_res") %>%
+  filter(barriers_res == 1) %>%
+  pivot_longer(feeling_grateful:feeling_nervous, names_to = "emotions", values_to = "emo_res") %>%
+  filter(emo_res == 1) %>%
+  group_by(barriers, emotions) %>%
+  summarise(
+    mean = mean(msg_likelihood),
+    sd = sd(msg_likelihood),
+    n = n()) %>%
+  ggplot(aes(x = barriers, y = n)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.4) +
+  facet_wrap(~emotions) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+bix %>%
+  pivot_longer(nonattend_GP:nonattend_difficult, names_to = "barriers", values_to = "barriers_res") %>%
+  filter(barriers_res == 1) %>%
+  pivot_longer(feeling_grateful:feeling_nervous, names_to = "emotions", values_to = "emo_res") %>%
+  filter(emo_res == 1) %>%
+  group_by(emotions, barriers) %>%
+  summarise(
+    mean = mean(msg_likelihood),
+    sd = sd(msg_likelihood),
+    n = n()) %>% print(n = 106)
+
+sum(bix$feeling_confident)
+
+
+bix %>%
+  pivot_longer(attend_treatable:attend_free, names_to = "enablers", values_to = "enablers_res") %>%
+  filter(enablers_res == 1) %>%
+  pivot_longer(feeling_grateful:feeling_nervous, names_to = "emotions", values_to = "emo_res") %>%
+  filter(emo_res == 1) %>%
+  group_by(emotions, enablers) %>%
+  summarise(
+    mean = mean(msg_likelihood),
+    sd = sd(msg_likelihood),
+    n = n()) %>% print(n = 106)
+
+bix %>%
+  filter(feeling_scared == 1) %>%
+  count()
+```
+
+```{r}
+# For the commonly reported barriers, which emotion is most frequently reported?
+neg_emo <- c("feeling_annoyed", "feeling_confused", "feeling_nervous", "feeling_scared")
+pos_emo <- c("feeling_confident", "feeling_encouraged", "feeling_grateful", "feeling_interested")
+
+## Scared, Symptoms
+lik_reasons_emo <- lik_reasons_emo %>%
+  mutate(
+    emotions = factor(emotions, 
+                      levels = c("feeling_annoyed", "feeling_confident", "feeling_confused", "feeling_encouraged", "feeling_grateful", "feeling_interested", "feeling_nervous", "feeling_nothing", "feeling_scared", "feeling_uninterested"), 
+                      labels = c("Annoyed", "Confident", "Confused", "Encouraged", "Grateful", "Interested", "Nervous", "Nothing", "Scared", "Uninterested"))
+  )
+
+
+p1 <- lik_reasons_emo %>%
+  filter(reasons == "nonattend_scared", emotions == "Annoyed"| emotions == "Confused"|emotions == "Nervous"|emotions ==  "Scared") %>% 
+  ggplot(aes(x = emotions, y = n)) +
+  geom_col(fill = "darkred", width = 0.9) +
+  theme_minimal() +
+  geom_text(aes(label = n), 
+            vjust = -0.5,    
+            color = "black", 
+            size = 4) +
+  labs(x = "Negative Emotions",
+       y = " ") +
+  coord_cartesian(ylim = c(0, 500))
+
+p2 <- lik_reasons_emo %>%
+  filter(reasons == "nonattend_scared", emotions == "Confident"| emotions == "Encouraged"|emotions == "Grateful"|emotions ==  "Interested") %>% 
+  ggplot(aes(x = emotions, y = n)) +
+  geom_col(fill = "darkblue", width = 0.9) +
+  theme_minimal() +
+  theme_minimal() +
+  geom_text(aes(label = n), 
+            vjust = -0.5,    
+            color = "black", 
+            size = 4) +
+  labs(x = "Positive Emotions",
+       y = "Number of participants") +
+  coord_cartesian(ylim = c(0, 500))
+
+
+p3 <- lik_reasons_emo %>%
+  filter(reasons == "nonattend_scared", emotions == "Nothing"| emotions == "Uninterested") %>% 
+  ggplot(aes(x = emotions, y = n)) +
+  geom_col(fill = "grey", width = 0.5) +
+  theme_minimal() +
+  theme_minimal() +
+  geom_text(aes(label = n), 
+            vjust = -0.5,    
+            color = "black", 
+            size = 4) +
+  labs(x = "Neutral Emotions",
+       y = " ") +
+  coord_cartesian(ylim = c(0, 500))
+
+cowplot::plot_grid(p2, p3, p1
+                   , nrow = 1)
+
+lik_reasons_emo %>%
+  filter(reasons == "nonattend_symptoms")
+
+## Treatable, Earlier, Reassuring
+lik_reasons_emo %>%
+  filter(reasons == "attend_treatable")
+
+lik_reasons_emo %>%
+  filter(reasons == "attend_earlier")
+
+lik_reasons_emo %>%
+  filter(reasons == "attend_reassuring")
+
+```
+
+
+```{r}
+lik_reasons_emo %>%
+  filter(reasons == "attend_earlier", emotions == "Annoyed"| emotions == "Confused"|emotions == "Nervous"|emotions ==  "Scared")
+
+lik_reasons_emo %>%
+  filter(reasons == "attend_treatable", emotions == "Confident"| emotions == "Encouraged"|emotions == "Grateful"|emotions ==  "Interested")
+
+summary(lm(msg_likelihood ~ (attend_treatable + attend_earlier + nonattend_scared) * (feeling_nervous + feeling_interested), bix))
+
+```
+
+```{r}
+set.seed(20240804)
+bix_long %>%
+  pivot_longer(attend_treatable:nonattend_difficult, names_to = "reasons", values_to = "reason_res") %>%
+  filter(e_res2 != 0) %>%
+  ggplot(aes(x = reasons, y = msg_likelihood)) +
+  geom_jitter(alpha = 0.6)
+
+res_df <- bix_long %>%
+  pivot_longer(attend_treatable:nonattend_difficult, names_to = "reasons", values_to = "reason_res") %>% filter(reason_res != 0)
+
+summary(lm(msg_likelihood ~ reasons, res_df))
+
+```
+
+
+
